@@ -1,0 +1,6 @@
+# setup-libs.sh で取得する同梱ライブラリ（合計 45MB 超）
+lib/
+
+.DS_Store
+node_modules/
+*.zip

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Speaker Deck → Obsidian</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <!-- ============================ ヘッダー ============================ -->
+    <header class="topbar">
+      <div class="topbar__title">
+        <span class="logo">SD</span>
+        <span id="deckTitleTop" class="topbar__deck">Speaker Deck → Obsidian</span>
+      </div>
+      <div class="topbar__actions">
+        <button id="openInTabBtn" class="icon-btn" title="タブで開く（長時間の OCR 向け）">⧉</button>
+        <button id="toggleSettingsBtn" class="icon-btn" title="設定">⚙</button>
+      </div>
+    </header>
+
+    <!-- ============================ 本体 ============================ -->
+    <main id="mainView">
+      <!-- 保存先 -->
+      <section class="fields">
+        <label class="field">
+          <span class="field__label">出力方式</span>
+          <select id="outputMode">
+            <option value="vault">Vault に直接書き込み</option>
+            <option value="downloads">ダウンロード + obsidian:// URI</option>
+          </select>
+        </label>
+
+        <!-- 出力方式 = vault のとき -->
+        <div class="field" id="rowVaultDir">
+          <span class="field__label">Vault フォルダ</span>
+          <div class="field__inline">
+            <input id="vaultDirLabel" type="text" readonly placeholder="未選択" />
+            <button id="pickVaultBtn" class="btn btn--small">選択…</button>
+          </div>
+          <span class="field__hint" id="vaultDirHint">Vault のルートフォルダを一度だけ選択してください</span>
+        </div>
+
+        <!-- 出力方式 = downloads のとき -->
+        <label class="field" id="rowVaultName">
+          <span class="field__label">Vault 名</span>
+          <input id="vault" type="text" placeholder="（既定の Vault を使う場合は空欄）" />
+        </label>
+
+        <label class="field">
+          <span class="field__label">ノート名</span>
+          <input id="noteName" type="text" placeholder="スライドタイトル" />
+        </label>
+
+        <label class="field">
+          <span class="field__label">ノート保存先</span>
+          <input id="notePath" type="text" placeholder="（空欄 = Vault 直下）" />
+          <span class="field__hint" id="notePathHint">Vault 内のパス。無ければ自動で作成します</span>
+        </label>
+
+        <label class="field">
+          <span class="field__label">PDF 保存先</span>
+          <input id="pdfPath" type="text" placeholder="（空欄 = ノートと同じ場所）" />
+          <span class="field__hint" id="pdfPathHint">Vault 内のパス。無ければ自動で作成します</span>
+        </label>
+      </section>
+
+      <!-- プロパティ -->
+      <section class="props">
+        <div class="section-title">プロパティ</div>
+        <div class="prop">
+          <span class="prop__key">title</span>
+          <input id="propTitle" class="prop__val" type="text" />
+        </div>
+        <div class="prop">
+          <span class="prop__key">author</span>
+          <input id="propAuthor" class="prop__val" type="text" />
+        </div>
+        <div class="prop">
+          <span class="prop__key">source</span>
+          <input id="propSource" class="prop__val" type="text" />
+        </div>
+        <div class="prop">
+          <span class="prop__key">date</span>
+          <input id="propDate" class="prop__val" type="text" />
+        </div>
+        <div class="prop">
+          <span class="prop__key">tags</span>
+          <input id="propTags" class="prop__val" type="text" placeholder="slide, speakerdeck" />
+        </div>
+        <div class="prop">
+          <span class="prop__key">pdf</span>
+          <input id="propPdfUrl" class="prop__val" type="text" placeholder="PDF の URL" />
+        </div>
+      </section>
+
+      <!-- 進捗 -->
+      <section id="progressBox" class="progress" hidden>
+        <div class="progress__bar"><div id="progressFill" class="progress__fill"></div></div>
+        <div id="progressText" class="progress__text">待機中</div>
+        <details class="progress__log">
+          <summary>ログ</summary>
+          <pre id="logArea"></pre>
+        </details>
+      </section>
+
+      <!-- プレビュー -->
+      <section class="preview">
+        <div class="section-title">
+          ノート内容
+          <span id="previewMeta" class="section-title__meta"></span>
+        </div>
+        <textarea id="markdown" spellcheck="false" placeholder="「スライドを解析」を押すと、ここに Markdown が生成されます。"></textarea>
+      </section>
+
+      <!-- 設定 -->
+      <section id="settingsPanel" class="settings" hidden>
+        <div class="section-title">解析設定</div>
+
+        <label class="row">
+          <input id="optOcr" type="checkbox" checked />
+          <span>テキストが取れないページを Tesseract.js で OCR する</span>
+        </label>
+
+        <label class="row row--inline">
+          <span>OCR 判定しきい値（文字数）</span>
+          <input id="optThreshold" type="number" min="0" max="500" value="20" />
+        </label>
+
+        <label class="row row--inline">
+          <span>OCR 言語</span>
+          <select id="optLang">
+            <option value="jpn+eng">日本語 + 英語</option>
+            <option value="jpn">日本語のみ</option>
+            <option value="eng">英語のみ</option>
+          </select>
+        </label>
+
+        <label class="row row--inline">
+          <span>レンダリング幅 (px)</span>
+          <input id="optWidth" type="number" min="800" max="3200" step="100" value="1600" />
+        </label>
+
+        <label class="row row--inline">
+          <span>最大ページ数（0 = 全部）</span>
+          <input id="optMaxPages" type="number" min="0" max="999" value="0" />
+        </label>
+
+        <div class="section-title">出力設定</div>
+
+        <label class="row row--inline">
+          <span>スライドの埋め込み</span>
+          <select id="optEmbedMode">
+            <option value="image">画像（1枚ずつ書き出し）</option>
+            <option value="pdf">PDF のページ指定</option>
+          </select>
+        </label>
+
+        <label class="row row--inline">
+          <span>抽出テキストの表示</span>
+          <select id="optTextBlock">
+            <option value="callout">折りたたみコールアウト</option>
+            <option value="details">&lt;details&gt; タグ</option>
+            <option value="plain">折りたたまない</option>
+          </select>
+        </label>
+
+        <label class="row" id="rowSavePdf">
+          <input id="optSavePdf" type="checkbox" checked />
+          <span>PDF も保存する</span>
+        </label>
+
+        <label class="row" id="rowOpenAfter">
+          <input id="optOpenAfter" type="checkbox" checked />
+          <span>保存後に Obsidian でノートを開く</span>
+        </label>
+
+        <label class="row row--inline" id="rowUriMode">
+          <span>Obsidian 連携方式</span>
+          <select id="optUriMode">
+            <option value="new">obsidian://new（標準）</option>
+            <option value="advanced">obsidian://advanced-uri</option>
+            <option value="none">送出しない（クリップボードのみ）</option>
+          </select>
+        </label>
+
+        <label class="row" id="rowDownloadMd">
+          <input id="optDownloadMd" type="checkbox" checked />
+          <span>.md ファイルも保存する（URI 長制限のバックアップ）</span>
+        </label>
+
+        <label class="row">
+          <input id="optClipboard" type="checkbox" checked />
+          <span>Markdown をクリップボードにコピーする</span>
+        </label>
+      </section>
+    </main>
+
+    <!-- ============================ フッター ============================ -->
+    <footer class="footer">
+      <div id="status" class="footer__status">Speaker Deck のスライドページを開いてください</div>
+      <div class="footer__buttons">
+        <button id="extractBtn" class="btn">スライドを解析</button>
+        <button id="sendBtn" class="btn btn--primary" disabled>Obsidian に追加</button>
+      </div>
+    </footer>
+
+    <script src="../lib/pdf.js"></script>
+    <script src="../lib/tesseract.min.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
