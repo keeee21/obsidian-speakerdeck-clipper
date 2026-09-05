@@ -66,3 +66,18 @@ cd obsidian-speakerdeck-clipper
 | **テンプレート** | ノート名・保存先・プロパティ・本文フォーマットの組。複数作って URL で自動選択できます |
 
 各項目の詳細は [docs/features.md](docs/features.md) を参照してください。
+
+---
+
+## ライセンス
+
+このリポジトリのコードは [MIT License](LICENSE) です。
+
+`setup-libs.sh` が取得するライブラリと、UI に埋め込んでいるアイコンはそれぞれの
+ライセンスに従います（いずれもリポジトリには含めていません / 埋め込み分は出典を明記しています）。
+
+| 対象 | ライセンス |
+| --- | --- |
+| [PDF.js](https://github.com/mozilla/pdf.js) | Apache-2.0 |
+| [Tesseract.js](https://github.com/naptha/tesseract.js) と学習済みデータ | Apache-2.0 |
+| [Lucide](https://github.com/lucide-icons/lucide)（`src/icons.js` のパスデータ） | ISC |
