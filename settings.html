@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ja" id="settings-page">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>obsidian-speakerdeck-clipper の設定</title>
+    <link rel="stylesheet" href="src/style.css" />
+    <link rel="stylesheet" href="settings/settings.css" />
+  </head>
+  <body>
+    <div id="settings">
+      <div id="settings-container">
+        <!-- ==================================================== サイドバー -->
+        <div id="sidebar" class="sidebar">
+          <div id="settings-sidebar-title">
+            <span class="logo">SD</span>
+            <span>設定</span>
+          </div>
+          <ul class="nav-list">
+            <li data-section="general"><i data-icon="paperclip"></i><span>一般</span></li>
+            <li data-section="analysis"><i data-icon="scan-text"></i><span>解析</span></li>
+            <li data-section="output"><i data-icon="file-text"></i><span>出力</span></li>
+            <li data-section="properties"><i data-icon="archive"></i><span>プロパティ</span></li>
+            <li data-section="variables"><i data-icon="list"></i><span>変数とフィルタ</span></li>
+          </ul>
+          <div class="sidebar-heading">テンプレート</div>
+          <button type="button" id="new-template-btn" class="mod-cta">新しいテンプレート</button>
+          <ul id="template-list" class="nav-list"></ul>
+        </div>
+
+        <!-- ==================================================== 本体 -->
+        <div id="content">
+          <div id="navbar">
+            <div id="navbar-title">
+              <span class="logo">SD</span>
+              <span>obsidian-speakerdeck-clipper</span>
+            </div>
+            <button id="hamburger-menu" class="hamburger-menu" type="button">
+              <span class="hamburger-icon"></span>
+            </button>
+          </div>
+
+          <!-- ------------------------------------------------ 一般 -->
+          <div id="general-section" class="settings-section">
+            <div class="settings-section-header">
+              <h2>一般</h2>
+            </div>
+
+            <div class="setting-group">
+              <div class="setting-item setting-item-heading"><h3>保存先</h3></div>
+              <div class="setting-items">
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="output-mode">保存方法</label>
+                    <div class="setting-item-description">
+                      <strong>Vault に直接書き込み</strong>はノート・画像・PDF を Vault のフォルダへそのまま書き込みます。
+                      <strong>ダウンロード + URI</strong> はファイルをダウンロードフォルダに落とし、ノートは <code>obsidian://</code> で渡します。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <select id="output-mode">
+                      <option value="vault">Vault に直接書き込み</option>
+                      <option value="downloads">ダウンロード + obsidian:// URI</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-item mod-horizontal" id="vault-dir-item">
+                  <div class="setting-item-info">
+                    <label for="pick-vault-btn">Vault フォルダ</label>
+                    <div class="setting-item-description" id="vault-dir-status">未選択です。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="pick-vault-btn">選択…</button>
+                  </div>
+                </div>
+
+                <div class="setting-item">
+                  <label for="vault-input">Vault 名</label>
+                  <div class="setting-item-description">
+                    <code>obsidian://</code> でノートを開くときに使う Vault 名です。Obsidian 側の Vault 名と完全に一致させてください。
+                    <strong>Enter</strong> で追加、先頭のものが既定になります。空のままなら Obsidian の既定 Vault が使われます。
+                  </div>
+                  <input type="text" id="vault-input" placeholder="Enter で Vault を追加" autocomplete="off" spellcheck="false" />
+                  <ul id="vault-list" class="setting-item-list"></ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <div class="setting-item setting-item-heading"><h3>動作</h3></div>
+              <div class="setting-items">
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="save-behavior">保存ボタンの既定動作</label>
+                    <div class="setting-item-description">
+                      ポップアップのボタンを押したときの動作です。それ以外の動作はボタン横のメニューから選べます。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <select id="save-behavior">
+                      <option value="addToObsidian">Obsidian に追加</option>
+                      <option value="saveFile">ファイルとして保存</option>
+                      <option value="copyToClipboard">クリップボードにコピー</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-item mod-horizontal mod-toggle">
+                  <div class="setting-item-info">
+                    <label for="open-after-save">保存後に Obsidian でノートを開く</label>
+                    <div class="setting-item-description">Vault に直接書き込んだあと、<code>obsidian://open</code> でノートを開きます。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <div class="checkbox-container"><input type="checkbox" id="open-after-save" /></div>
+                  </div>
+                </div>
+
+                <div class="setting-item mod-horizontal" id="uri-mode-item">
+                  <div class="setting-item-info">
+                    <label for="uri-mode">Obsidian 連携方式</label>
+                    <div class="setting-item-description">
+                      URI が長すぎる場合は自動で <code>clipboard=true</code> に切り替え、本文をクリップボード経由で渡します。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <select id="uri-mode">
+                      <option value="new">obsidian://new（標準）</option>
+                      <option value="advanced">obsidian://advanced-uri</option>
+                      <option value="none">送出しない</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-item mod-horizontal mod-toggle" id="download-md-item">
+                  <div class="setting-item-info">
+                    <label for="download-md">.md ファイルも保存する</label>
+                    <div class="setting-item-description">URI の長さ制限で本文が渡らなかったときのバックアップになります。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <div class="checkbox-container"><input type="checkbox" id="download-md" /></div>
+                  </div>
+                </div>
+
+                <div class="setting-item mod-horizontal mod-toggle">
+                  <div class="setting-item-info">
+                    <label for="clipboard-copy">Markdown をクリップボードにコピーする</label>
+                    <div class="setting-item-description">保存と同時に、生成した Markdown 全文をクリップボードへ入れます。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <div class="checkbox-container"><input type="checkbox" id="clipboard-copy" /></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <div class="setting-item setting-item-heading"><h3>詳細</h3></div>
+              <div class="setting-items">
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="reset-default-template-btn">既定のテンプレートをリセット</label>
+                    <div class="setting-item-description">テンプレートをすべて消して、初期状態のテンプレート 1 個に戻します。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="reset-default-template-btn" class="mod-warning">リセット</button>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="export-all-settings-btn">すべての設定をエクスポート</label>
+                    <div class="setting-item-description">設定・テンプレート・プロパティ型をまとめて JSON に書き出します。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="export-all-settings-btn">エクスポート</button>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="import-all-settings-btn">すべての設定をインポート</label>
+                    <div class="setting-item-description">現在の設定をすべて置き換えます。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="import-all-settings-btn">インポート</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------ 解析 -->
+          <div id="analysis-section" class="settings-section">
+            <div class="settings-section-header">
+              <h2>解析</h2>
+            </div>
+            <div class="setting-group">
+              <div class="setting-items">
+                <div class="setting-item mod-horizontal mod-toggle">
+                  <div class="setting-item-info">
+                    <label for="opt-ocr">テキストが取れないページを OCR する</label>
+                    <div class="setting-item-description">
+                      PDF のテキストレイヤーから十分な文字数が取れなかったページだけ、画像として認識にかけます。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <div class="checkbox-container"><input type="checkbox" id="opt-ocr" /></div>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-threshold">OCR 判定しきい値</label>
+                    <div class="setting-item-description">抽出できた文字数がこれ未満のページを OCR に回します。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <input type="number" id="opt-threshold" min="0" max="500" />
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-lang">OCR 言語</label>
+                    <div class="setting-item-description">認識に使う学習済みデータです。言語を絞るほど速く、精度も安定します。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <select id="opt-lang">
+                      <option value="jpn+eng">日本語 + 英語</option>
+                      <option value="jpn">日本語のみ</option>
+                      <option value="eng">英語のみ</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-width">レンダリング幅 (px)</label>
+                    <div class="setting-item-description">
+                      各ページをこの幅で描画してから OCR と画像書き出しに使います。大きいほど精度が上がり、遅く・重くなります。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <input type="number" id="opt-width" min="800" max="3200" step="100" />
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-max-pages">最大ページ数</label>
+                    <div class="setting-item-description">0 で全ページ。動作確認で数ページだけ試したいときに使います。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <input type="number" id="opt-max-pages" min="0" max="999" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------ 出力 -->
+          <div id="output-section" class="settings-section">
+            <div class="settings-section-header">
+              <h2>出力</h2>
+            </div>
+            <div class="setting-group">
+              <div class="setting-items">
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-embed-mode">スライドの埋め込み</label>
+                    <div class="setting-item-description">
+                      <strong>画像</strong>は各ページを WebP で書き出して <code>![[...]]</code> で貼ります。
+                      <strong>PDF のページ指定</strong>は <code>![[note.pdf#page=1]]</code> を使うためファイルは 1 個で済みますが、
+                      埋め込みごとに PDF ビューアが開きます。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <select id="opt-embed-mode">
+                      <option value="image">画像（1 枚ずつ書き出し）</option>
+                      <option value="pdf">PDF のページ指定</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-image-quality">画像の品質</label>
+                    <div class="setting-item-description">WebP の圧縮品質（0.1〜1.0）。下げるとファイルサイズが小さくなります。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <input type="number" id="opt-image-quality" min="0.1" max="1" step="0.01" />
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="opt-text-block">抽出テキストの表示</label>
+                    <div class="setting-item-description">
+                      折りたたみコールアウトは全行が <code>&gt;</code> で始まるため、空行があってもトグルから中身がこぼれません。
+                      <code>&lt;details&gt;</code> は空行で HTML ブロックが終わる仕様を避けるため、空行を潰して <code>&lt;pre&gt;</code> に入れます。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <select id="opt-text-block">
+                      <option value="callout">折りたたみコールアウト</option>
+                      <option value="details">&lt;details&gt; タグ</option>
+                      <option value="plain">折りたたまない</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal mod-toggle">
+                  <div class="setting-item-info">
+                    <label for="opt-save-pdf">PDF も保存する</label>
+                    <div class="setting-item-description">「PDF のページ指定」で埋め込む場合は必須です。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <div class="checkbox-container"><input type="checkbox" id="opt-save-pdf" /></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------ プロパティ -->
+          <div id="properties-section" class="settings-section">
+            <div class="settings-section-header">
+              <h2>プロパティ</h2>
+            </div>
+            <div class="setting-group">
+              <div class="setting-items">
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="import-types-btn">プロパティをインポート</label>
+                    <div class="setting-item-description">
+                      Vault 内の <strong>.obsidian/types.json</strong> を読み込むと、Obsidian 側と同じ型定義になります。
+                      このフォルダは多くの OS で既定では隠しフォルダです。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="import-types-btn">インポート</button>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal">
+                  <div class="setting-item-info">
+                    <label for="export-types-btn">プロパティをエクスポート</label>
+                    <div class="setting-item-description">
+                      <strong>types.json</strong> として書き出します。Vault の <strong>.obsidian</strong> に置けば Obsidian 側でも同じ型になります。
+                    </div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="export-types-btn">エクスポート</button>
+                  </div>
+                </div>
+                <div class="setting-item mod-horizontal" id="delete-unused-item">
+                  <div class="setting-item-info">
+                    <label for="delete-unused-properties-btn">未使用のプロパティを削除</label>
+                    <div class="setting-item-description">どのテンプレートからも使われていないプロパティ型を消します。</div>
+                  </div>
+                  <div class="setting-item-control">
+                    <button type="button" id="delete-unused-properties-btn">削除</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="setting-group">
+              <div class="setting-item setting-item-heading"><h3>すべてのプロパティ</h3></div>
+              <div class="setting-items">
+                <div class="setting-item-description">
+                  型を変えるとアイコンが変わり、フロントマターへの書き方（リスト・数値・真偽値・日付）も変わります。
+                  既定値はテンプレートでプロパティを追加したときに自動で入る値です。
+                </div>
+                <div id="property-types-list" class="properties-list"></div>
+                <div class="add-btn">
+                  <a id="add-property-type-btn"><i data-icon="plus"></i>プロパティを追加</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------ 変数とフィルタ -->
+          <div id="variables-section" class="settings-section">
+            <div class="settings-section-header">
+              <h2>変数とフィルタ</h2>
+            </div>
+            <div class="setting-group">
+              <div class="setting-item setting-item-heading"><h3>変数</h3></div>
+              <div class="setting-items">
+                <div class="setting-item-description">
+                  テンプレートのノート名・保存先・プロパティ・本文で <code>{{変数名}}</code> として使えます。クリックでコピーできます。
+                </div>
+                <div id="variable-reference" class="reference-list"></div>
+              </div>
+            </div>
+            <div class="setting-group">
+              <div class="setting-item setting-item-heading"><h3>フィルタ</h3></div>
+              <div class="setting-items">
+                <div class="setting-item-description">
+                  <code>{{変数|フィルタ}}</code> のように <code>|</code> でつないで値を加工します。複数つなげられます。
+                  例: <code>{{author|split:", "|wikilink|join}}</code>
+                </div>
+                <div id="filter-reference" class="reference-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------ テンプレート -->
+          <div id="templates-section" class="settings-section">
+            <div class="settings-section-header">
+              <h2 id="template-editor-title">テンプレートを編集</h2>
+              <div class="settings-section-actions">
+                <button type="button" class="export-template-btn">エクスポート</button>
+                <button type="button" class="import-template-btn">インポート</button>
+                <div class="menu-btn">
+                  <button type="button" id="more-actions-btn" class="menu-toggle">その他</button>
+                  <div id="template-actions-menu" class="menu">
+                    <div class="menu-item" id="duplicate-template-btn">
+                      <div class="menu-item-icon"><i data-icon="copy-plus"></i></div>
+                      <div class="menu-item-title">複製</div>
+                    </div>
+                    <div class="menu-item" id="copy-template-json-btn">
+                      <div class="menu-item-icon"><i data-icon="copy"></i></div>
+                      <div class="menu-item-title">JSON としてコピー</div>
+                    </div>
+                    <div class="menu-item" id="delete-template-btn">
+                      <div class="menu-item-icon"><i data-icon="trash-2"></i></div>
+                      <div class="menu-item-title">削除</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="template-editor">
+              <div class="setting-group">
+                <div class="setting-item setting-item-heading"><h3>テンプレート</h3></div>
+                <div class="setting-items">
+                  <div class="setting-item">
+                    <label for="template-name">テンプレート名</label>
+                    <input type="text" id="template-name" placeholder="テンプレート名" />
+                  </div>
+                  <div class="setting-item">
+                    <label for="url-patterns">自動選択の条件</label>
+                    <div class="setting-item-description">
+                      ここに書いた URL で始まるページを開いているとき、このテンプレートが自動で選ばれます。1 行に 1 つ。
+                      <code>/正規表現/i</code> の形でも書けます。
+                    </div>
+                    <textarea id="url-patterns" rows="2" placeholder="https://speakerdeck.com/" spellcheck="false"></textarea>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <div class="setting-item setting-item-heading"><h3>保存先</h3></div>
+                <div class="setting-items">
+                  <div class="setting-item">
+                    <label for="template-behavior">動作</label>
+                    <select id="template-behavior">
+                      <option value="create">新規ノートを作成</option>
+                      <option value="append">既存ノートの末尾に追加</option>
+                      <option value="prepend">既存ノートの先頭に追加</option>
+                      <option value="overwrite">ノートを上書き</option>
+                    </select>
+                  </div>
+                  <div class="setting-item">
+                    <label for="note-name-format">ノート名</label>
+                    <div class="setting-item-description">変数が使えます。ファイル名に使えない文字は自動で置き換えます。</div>
+                    <input type="text" id="note-name-format" placeholder="{{title}}" />
+                  </div>
+                  <div class="setting-item">
+                    <label for="template-path-name">ノートの保存先</label>
+                    <div class="setting-item-description">
+                      Vault 内のフォルダです。直接書き込みなら無ければ作成します。
+                      <code>obsidian://</code> 経由では既存のフォルダしか指定できません。
+                    </div>
+                    <input type="text" id="template-path-name" placeholder="Clippings" />
+                  </div>
+                  <div class="setting-item">
+                    <label for="template-pdf-path">PDF と画像の保存先</label>
+                    <div class="setting-item-description">空欄ならノートと同じ場所に置きます。ページ画像はここにノート名のサブフォルダを作ってまとめます。</div>
+                    <input type="text" id="template-pdf-path" placeholder="（空欄 = ノートと同じ場所）" />
+                  </div>
+                  <div class="setting-item">
+                    <label for="template-vault">Vault</label>
+                    <div class="setting-item-description">このテンプレートで使う Vault です。一覧は一般設定で追加できます。</div>
+                    <select id="template-vault">
+                      <option value="">既定の Vault</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="setting-group">
+                <div class="setting-item setting-item-heading"><h3>内容</h3></div>
+                <div class="setting-items">
+                  <div id="properties-container">
+                    <label>プロパティ</label>
+                    <div class="setting-item-description">
+                      ノート冒頭のフロントマターになります。左のアイコンで型、中央で名前、右で値を編集し、
+                      ドラッグで並べ替えられます。値には変数が使えます。
+                    </div>
+                    <div id="template-properties" class="properties-list"></div>
+                    <div class="add-btn">
+                      <a id="add-property-btn"><i data-icon="plus"></i>プロパティを追加</a>
+                    </div>
+                  </div>
+                  <div class="setting-item">
+                    <label for="note-content-format">ノート本文</label>
+                    <div class="setting-item-description">
+                      フロントマターの下に入る本文です。<code>{{slides}}</code> が解析した全ページの Markdown に置き換わります。
+                    </div>
+                    <textarea id="note-content-format" rows="10" spellcheck="false"></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================================================== インポート用モーダル -->
+    <div id="import-modal" class="modal-container">
+      <div class="modal-bg"></div>
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title" id="import-modal-title">インポート</div>
+        </div>
+        <div class="modal-content">
+          <div class="import-options">
+            <div class="import-drop-zone">
+              <p>ここにファイルをドロップ</p>
+            </div>
+            <p class="import-or-text">または JSON を貼り付け</p>
+            <textarea class="import-json-textarea" spellcheck="false"></textarea>
+          </div>
+          <p class="import-error" hidden></p>
+        </div>
+        <div class="modal-button-container">
+          <button type="button" class="import-confirm-btn mod-cta">インポート</button>
+          <button type="button" class="import-cancel-btn">キャンセル</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="settings/settings.js"></script>
+  </body>
+</html>

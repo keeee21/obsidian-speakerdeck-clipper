@@ -1,379 +1,275 @@
-/* Obsidian Web Clipper 風のポップアップ UI */
+/**
+ * popup/popup.css
+ *
+ * ポップアップ専用のレイアウト。共通のトークンとコンポーネントは src/style.css にある。
+ * 設定項目はすべて設定画面（settings.html）にあり、ここには置かない。
+ */
 
 :root {
-  --bg: #ffffff;
-  --bg-alt: #f6f6f7;
-  --bg-input: #ffffff;
-  --border: #e0e0e2;
-  --text: #1f2023;
-  --text-muted: #75767c;
-  --accent: #7c5cff;
-  --accent-text: #ffffff;
-  --danger: #d64545;
-  --ok: #2f9e63;
-  --radius: 8px;
+  --popup-width: 360px;
+  --popup-height: 560px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e1e20;
-    --bg-alt: #26262a;
-    --bg-input: #2a2a2e;
-    --border: #3a3a40;
-    --text: #e6e6e8;
-    --text-muted: #9a9aa2;
-    --accent: #8f74ff;
-    --accent-text: #ffffff;
-  }
+#popup {
+  height: max(var(--popup-height), 100vh);
+  max-height: var(--popup-height);
+  overflow: hidden;
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  width: 420px;
-  max-height: 600px;
+#popup-container {
+  height: 100%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
+  width: var(--popup-width);
+  overflow: hidden;
 }
 
-/* body が拡張機能ページ（タブ）で開かれたときは広げる */
+/* タブとして開いたときは幅・高さの制限を外す */
 body.standalone {
-  width: 100%;
+  --popup-width: 100%;
+  --popup-height: 100vh;
   max-width: 860px;
-  max-height: none;
-  min-height: 100vh;
   margin: 0 auto;
 }
 
-/* ------------------------------------------------------------- topbar */
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-alt);
+body.standalone #popup-container {
+  width: 100%;
 }
 
-.topbar__title {
+.error-message {
+  margin: 0;
+  padding: 24px var(--popup-padding);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* ------------------------------------------------------------ ヘッダー */
+#popup-header {
   display: flex;
+  flex-direction: row;
+  padding: calc(var(--popup-padding) * 0.5) calc(var(--popup-padding) * 0.5) 0;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+}
+
+#template-container {
+  flex-grow: 1;
   min-width: 0;
 }
 
-.logo {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-text);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.topbar__deck {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbar__actions {
-  display: flex;
-  gap: 4px;
-  flex: none;
-}
-
-.icon-btn {
-  border: 1px solid transparent;
-  background: transparent;
+#template-select {
+  appearance: none;
+  border: none;
+  background-color: transparent;
+  border-radius: var(--radius-m);
+  padding: 0 calc(var(--popup-padding) * 0.5);
+  width: 100%;
+  font-weight: 500;
   color: var(--text-muted);
-  border-radius: 6px;
-  width: 26px;
-  height: 26px;
-  font-size: 14px;
+  height: 1.625rem;
+}
+
+#template-select:hover {
+  color: var(--text-normal);
+  background-color: var(--background-modifier-hover);
+}
+
+#template-select:focus {
+  color: var(--text-normal);
+  box-shadow: none;
+  border: none;
+}
+
+.popup-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  margin-inline-start: auto;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------ 本体 */
+.clipper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+#note-name-field {
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
+  padding: 6px var(--popup-padding) 10px;
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+  resize: none;
+  min-height: 2rem;
+  max-height: 6rem;
+  overflow-y: auto;
+}
+
+#note-name-field:focus {
+  box-shadow: none;
+  border: none;
+}
+
+.metadata-properties-header {
+  padding: 0 var(--popup-padding) 0.375rem;
+  font-size: var(--font-ui-small);
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+  display: flex;
+  flex-direction: row;
+  gap: 2px;
+  align-items: center;
   cursor: pointer;
 }
 
-.icon-btn:hover {
-  background: var(--bg-input);
-  border-color: var(--border);
-  color: var(--text);
+.metadata-properties-header:hover {
+  color: var(--text-normal);
 }
 
-/* ------------------------------------------------------------- main */
-main {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
+.metadata-properties-header svg {
+  color: var(--text-muted);
+  transition: transform 0.1s ease-in-out;
+}
+
+.metadata-properties-header.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.metadata-properties {
+  max-height: 46%;
+  flex-shrink: 1;
+}
+
+.metadata-properties.collapsed {
+  display: none;
+}
+
+#note-content-container {
+  border-top: 1px solid var(--divider-color);
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.section-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.section-title__meta {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 500;
-}
-
-/* ------------------------------------------------------------- fields */
-.fields {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.field {
-  display: grid;
-  grid-template-columns: 84px 1fr;
-  align-items: center;
-  gap: 8px;
-}
-
-.field__label {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.field__hint {
-  grid-column: 2;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.field__inline {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.field__inline input[readonly] {
-  color: var(--text-muted);
-  cursor: default;
-}
-
-.btn--small {
-  flex: none;
-  width: auto;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-input[type="text"],
-input[type="number"],
-select,
-textarea {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  color: var(--text);
-  font: inherit;
-}
-
-input:focus,
-select:focus,
-textarea:focus {
-  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  outline-offset: -1px;
-  border-color: var(--accent);
-}
-
-/* ------------------------------------------------------------- props */
-.props {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px;
-  background: var(--bg-alt);
-}
-
-.prop {
-  display: grid;
-  grid-template-columns: 74px 1fr;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-}
-
-.prop__key {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.prop__val {
-  background: transparent;
-  border-color: transparent;
-}
-
-.prop__val:hover {
-  border-color: var(--border);
-}
-
-/* ------------------------------------------------------------- progress */
-.progress__bar {
-  height: 6px;
-  border-radius: 999px;
-  background: var(--border);
+  flex-grow: 1;
+  min-height: 4rem;
   overflow: hidden;
 }
 
-.progress__fill {
+#note-content-field {
+  background-color: transparent;
+  border-radius: 0;
+  border: none;
+  padding: 10px var(--popup-padding);
+  resize: none;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smallest);
   height: 100%;
-  width: 0%;
-  background: var(--accent);
+}
+
+#note-content-field:focus {
+  box-shadow: none;
+  border: none;
+}
+
+/* ------------------------------------------------------------ フッター */
+.clipper-footer {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  border-top: 1px solid var(--divider-color);
+  background-color: var(--background-primary);
+}
+
+#progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.progress-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+#progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--interactive-accent);
   transition: width 0.2s ease;
 }
 
-.progress__text {
-  margin-top: 6px;
-  font-size: 12px;
+#progress-text {
+  font-size: var(--font-ui-smallest);
   color: var(--text-muted);
 }
 
-.progress__log summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 4px;
+#progress-text.is-error {
+  color: var(--text-error);
 }
 
-.progress__log pre {
-  max-height: 120px;
-  overflow: auto;
-  margin: 6px 0 0;
-  padding: 6px;
-  background: var(--bg-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 11px;
-  white-space: pre-wrap;
+#progress-text.is-success {
+  color: var(--text-success);
 }
 
-/* ------------------------------------------------------------- preview */
-.preview textarea {
-  min-height: 180px;
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-body.standalone .preview textarea {
-  min-height: 420px;
-}
-
-/* ------------------------------------------------------------- settings */
-.settings {
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
+.vault-path-container {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: row;
+  gap: 0.625rem;
 }
 
-.row {
+#vault-container {
+  flex-grow: 1;
+}
+
+#vault-select {
+  font-weight: 500;
+  min-width: 100px;
+}
+
+.action-buttons {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  position: relative;
+  width: 100%;
 }
 
-.row--inline {
-  justify-content: space-between;
-}
-
-.row--inline input,
-.row--inline select {
-  width: 140px;
-  flex: none;
-}
-
-/* ------------------------------------------------------------- footer */
-.footer {
-  border-top: 1px solid var(--border);
-  padding: 10px 12px;
-  background: var(--bg-alt);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.footer__status {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  min-height: 17px;
-}
-
-.footer__status.is-error {
-  color: var(--danger);
-}
-
-.footer__status.is-ok {
-  color: var(--ok);
-}
-
-.footer__buttons {
-  display: flex;
-  gap: 8px;
-}
-
-.btn {
+#clip-btn {
   flex: 1;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
+  font-weight: 500;
 }
 
-.btn:hover:not(:disabled) {
-  border-color: var(--accent);
+.action-buttons .menu-btn {
+  position: absolute;
+  right: 0;
 }
 
-.btn--primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-text);
+#more-btn {
+  color: var(--text-on-accent);
+  background-color: var(--interactive-accent);
+  box-shadow: inset 0 0 0 1px rgba(var(--mono-rgb-100), 0.12);
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  width: auto;
+  padding: 0 0.25rem;
 }
 
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
+#more-btn:hover:not(:disabled) {
+  background-color: var(--interactive-accent-hover);
+  box-shadow: inset 0 0 0 1px rgba(var(--mono-rgb-100), 0.16);
+}
+
+#more-dropdown {
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 6px;
+  min-width: 180px;
 }

@@ -1,16 +1,35 @@
 /**
  * popup/popup.js
  *
- * 1. content.js を注入して Speaker Deck のメタデータ + PDF URL を取得
- * 2. PDF を fetch → PDF.js でページごとにテキスト抽出
- * 3. テキストが少ないページは canvas にレンダリングして Tesseract.js で OCR
- * 4. Obsidian のページ埋め込み形式 Markdown を生成
- * 5. Vault へ直接書き込み（File System Access API）、
- *    または ダウンロード + obsidian:// URI で送出
+ * 処理の流れ:
+ *   1. content.js を注入して Speaker Deck のメタデータ + PDF URL を取得
+ *   2. 選ばれたテンプレートを変数で展開し、ノート名・保存先・プロパティを表示
+ *   3. 「スライドを解析」で PDF を取得し、ページごとにテキスト抽出（不足分は OCR）
+ *   4. 解析結果を {{slides}} などの変数に入れて本文を組み立てる
+ *   5. Vault へ直接書き込み、またはダウンロード + obsidian:// で送出
  *
+ * 設定項目はすべて settings.html 側にあり、ここでは store の値を読むだけ。
  * すべてブラウザローカルで完結し、生成 AI / 外部 API は一切利用しない。
  */
-'use strict';
+import {
+  ensureVaultPermission,
+  findTemplateById,
+  findTemplateForUrl,
+  getPropertyType,
+  getVaultDirHandle,
+  loadAll,
+  propertyTypeMap,
+  store,
+} from '../src/store.js';
+import { createIcon, getPropertyTypeIcon, initializeIcons } from '../src/icons.js';
+import {
+  formatDate,
+  generateFrontmatter,
+  joinPath,
+  renderTemplate,
+  sanitizeFileName,
+  sanitizeFolder,
+} from '../src/template.js';
 
 // ------------------------------------------------------------------ 定数
 const LIB = {
@@ -24,29 +43,22 @@ const LIB = {
 
 /**
  * obsidian:// URI に本文を直接載せる最大長（エンコード後）。
- * これを超えた場合は `clipboard=true` に切り替え、Obsidian 側にクリップボードから
+ * これを超えた場合は clipboard=true に切り替え、Obsidian 側にクリップボードから
  * 本文を読ませる。日本語は 1 文字が %XX%XX%XX（9 文字）に膨らむため、
  * 見た目 1 万文字のノートでも URI は 6〜7 万文字になる。
  */
 const MAX_URI_LENGTH = 8000;
 
-const DEFAULT_SETTINGS = {
-  outputMode: 'vault', // 'vault' | 'downloads'
-  vault: '',
-  notePath: '',
-  pdfPath: '',
-  ocr: true,
-  threshold: 20,
-  lang: 'jpn+eng',
-  width: 1600,
-  maxPages: 0,
-  embedMode: 'image', // 'image' = ページ画像を書き出す / 'pdf' = ![[x.pdf#page=N]]
-  textBlock: 'callout', // 'callout' | 'details' | 'plain'
-  savePdf: true,
-  openAfter: true,
-  uriMode: 'new',
-  downloadMd: true,
-  clipboard: true,
+const SAVE_BEHAVIOR_LABELS = {
+  addToObsidian: 'Obsidian に追加',
+  saveFile: 'ファイルとして保存',
+  copyToClipboard: 'クリップボードにコピー',
+};
+
+const SAVE_BEHAVIOR_ICONS = {
+  addToObsidian: 'import',
+  saveFile: 'file-text',
+  copyToClipboard: 'copy',
 };
 
 const isStandalone = new URLSearchParams(location.search).has('standalone');
@@ -55,298 +67,66 @@ const isStandalone = new URLSearchParams(location.search).has('standalone');
 const $ = (id) => document.getElementById(id);
 
 const el = {
-  deckTitleTop: $('deckTitleTop'),
-  openInTabBtn: $('openInTabBtn'),
-  toggleSettingsBtn: $('toggleSettingsBtn'),
-  settingsPanel: $('settingsPanel'),
-
-  outputMode: $('outputMode'),
-  rowVaultDir: $('rowVaultDir'),
-  rowVaultName: $('rowVaultName'),
-  vaultDirLabel: $('vaultDirLabel'),
-  vaultDirHint: $('vaultDirHint'),
-  pickVaultBtn: $('pickVaultBtn'),
-  vault: $('vault'),
-  noteName: $('noteName'),
-  notePath: $('notePath'),
-  notePathHint: $('notePathHint'),
-  pdfPath: $('pdfPath'),
-  pdfPathHint: $('pdfPathHint'),
-
-  propTitle: $('propTitle'),
-  propAuthor: $('propAuthor'),
-  propSource: $('propSource'),
-  propDate: $('propDate'),
-  propTags: $('propTags'),
-  propPdfUrl: $('propPdfUrl'),
-
-  progressBox: $('progressBox'),
-  progressFill: $('progressFill'),
-  progressText: $('progressText'),
-  logArea: $('logArea'),
-
-  previewMeta: $('previewMeta'),
-  markdown: $('markdown'),
-
-  optOcr: $('optOcr'),
-  optThreshold: $('optThreshold'),
-  optLang: $('optLang'),
-  optWidth: $('optWidth'),
-  optMaxPages: $('optMaxPages'),
-  optEmbedMode: $('optEmbedMode'),
-  optTextBlock: $('optTextBlock'),
-  rowSavePdf: $('rowSavePdf'),
-  optSavePdf: $('optSavePdf'),
-  optOpenAfter: $('optOpenAfter'),
-  optUriMode: $('optUriMode'),
-  optDownloadMd: $('optDownloadMd'),
-  optClipboard: $('optClipboard'),
-  rowOpenAfter: $('rowOpenAfter'),
-  rowUriMode: $('rowUriMode'),
-  rowDownloadMd: $('rowDownloadMd'),
-
-  status: $('status'),
-  extractBtn: $('extractBtn'),
-  sendBtn: $('sendBtn'),
+  templateSelect: $('template-select'),
+  openInTab: $('open-in-tab'),
+  openSettings: $('open-settings'),
+  errorMessage: document.querySelector('.error-message'),
+  clipper: document.querySelector('.clipper'),
+  noteName: $('note-name-field'),
+  propertiesHeader: document.querySelector('.metadata-properties-header'),
+  properties: document.querySelector('.metadata-properties'),
+  noteContent: $('note-content-field'),
+  progress: $('progress'),
+  progressFill: $('progress-fill'),
+  progressText: $('progress-text'),
+  vaultContainer: $('vault-container'),
+  vaultSelect: $('vault-select'),
+  pathField: $('path-name-field'),
+  clipBtn: $('clip-btn'),
+  moreBtn: $('more-btn'),
+  moreDropdown: $('more-dropdown'),
 };
 
 const state = {
   deck: null,
+  template: null,
+  variables: {},
   pages: [],
-  images: [], // [{ page, blob }] embedMode === 'image' のときだけ埋まる
+  images: [],
   pdfBytes: null,
-  lastGenerated: '',
-  vaultDir: null, // FileSystemDirectoryHandle
+  analyzed: false,
   running: false,
+  lastGeneratedContent: '',
 };
 
-// ------------------------------------------------------------------ ユーティリティ
+// ------------------------------------------------------------------ 表示ヘルパ
 function setStatus(message, kind = '') {
-  el.status.textContent = message;
-  el.status.className = 'footer__status' + (kind ? ` is-${kind}` : '');
-}
-
-function log(message) {
-  const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
-  el.logArea.textContent += `[${time}] ${message}\n`;
-  el.logArea.scrollTop = el.logArea.scrollHeight;
+  el.progress.hidden = false;
+  el.progressText.textContent = message;
+  el.progressText.className = kind ? `is-${kind}` : '';
 }
 
 function setProgress(ratio, text) {
-  el.progressBox.hidden = false;
+  el.progress.hidden = false;
   el.progressFill.style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
-  if (text) el.progressText.textContent = text;
+  if (text) setStatus(text);
 }
 
-function sanitizeFileName(name) {
-  return (
-    (name || 'untitled')
-      .replace(/[\\/:*?"<>|#^[\]]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 120) || 'untitled'
-  );
-}
-
-/** 相対パスとして安全な形に整える（先頭 / と .. を落とす） */
-function sanitizeFolder(folder) {
-  return (folder || '')
-    .split('/')
-    .map((seg) => seg.replace(/[\\:*?"<>|]/g, ' ').replace(/^\.+$/, '').trim())
-    .filter(Boolean)
-    .join('/');
-}
-
-function joinPath(folder, file) {
-  const dir = sanitizeFolder(folder);
-  return dir ? `${dir}/${file}` : file;
-}
-
-function yamlString(value) {
-  return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
-}
-
-function todayISO() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-function normalizeDate(raw) {
-  if (!raw) return todayISO();
-  const d = new Date(raw);
-  if (!Number.isNaN(d.getTime())) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  }
-  return raw;
+function showFatalError(message) {
+  el.errorMessage.textContent = message;
+  el.errorMessage.hidden = false;
+  el.clipper.hidden = true;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// ------------------------------------------------------------------ IndexedDB（ディレクトリハンドルの保管）
-// FileSystemDirectoryHandle は構造化複製できるが chrome.storage には入らないので IndexedDB を使う。
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open('speakerdeck-obsidian', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('kv');
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+function normalizeDate(raw) {
+  if (!raw) return '';
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? String(raw) : formatDate(date, 'YYYY-MM-DD');
 }
 
-async function idbSet(key, value) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('kv', 'readwrite');
-    tx.objectStore('kv').put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function idbGet(key) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('kv', 'readonly');
-    const req = tx.objectStore('kv').get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-// ------------------------------------------------------------------ File System Access
-async function hasPermission(handle) {
-  return (await handle.queryPermission({ mode: 'readwrite' })) === 'granted';
-}
-
-/** 権限が無ければ要求する。ユーザー操作（クリック）の直後に呼ぶこと。 */
-async function ensurePermission(handle) {
-  if (await hasPermission(handle)) return true;
-  return (await handle.requestPermission({ mode: 'readwrite' })) === 'granted';
-}
-
-async function pickVaultDir() {
-  if (!isStandalone) {
-    // ポップアップでファイルピッカーを開くとポップアップ自体が閉じてしまうため、
-    // タブに切り替えてから選ばせる。
-    await chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html?standalone=1&pick=1') });
-    window.close();
-    return;
-  }
-  const handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'obsidian-vault' });
-  if (!(await ensurePermission(handle))) throw new Error('フォルダへの書き込みが許可されませんでした。');
-  state.vaultDir = handle;
-  await idbSet('vaultDir', handle);
-  el.vaultDirLabel.value = handle.name;
-  // Vault のルートを選んだ場合、フォルダ名がそのまま Vault 名になる
-  if (!el.vault.value.trim()) el.vault.value = handle.name;
-  await saveSettings();
-  setStatus(`Vault フォルダを設定しました: ${handle.name}`, 'ok');
-}
-
-async function restoreVaultDir() {
-  try {
-    const handle = await idbGet('vaultDir');
-    if (!handle) return;
-    state.vaultDir = handle;
-    el.vaultDirLabel.value = handle.name;
-    if (!(await hasPermission(handle))) {
-      el.vaultDirHint.textContent = '再認可が必要です（「Obsidian に追加」を押すと確認が出ます）';
-    }
-  } catch (err) {
-    console.warn('ディレクトリハンドルを復元できませんでした', err);
-  }
-}
-
-/** vault 直下からの相対パスでディレクトリを掘る（無ければ作成） */
-async function ensureDir(root, relDir) {
-  let dir = root;
-  for (const seg of sanitizeFolder(relDir).split('/').filter(Boolean)) {
-    dir = await dir.getDirectoryHandle(seg, { create: true });
-  }
-  return dir;
-}
-
-async function writeIntoVault(relPath, data) {
-  const parts = relPath.split('/');
-  const name = parts.pop();
-  const dir = await ensureDir(state.vaultDir, parts.join('/'));
-  const fileHandle = await dir.getFileHandle(name, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(data);
-  await writable.close();
-}
-
-// ------------------------------------------------------------------ 設定の保存 / 復元
-async function loadSettings() {
-  const stored = await chrome.storage.local.get('settings');
-  const s = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
-  el.outputMode.value = s.outputMode;
-  el.vault.value = s.vault;
-  el.notePath.value = s.notePath;
-  el.pdfPath.value = s.pdfPath;
-  el.optOcr.checked = s.ocr;
-  el.optThreshold.value = s.threshold;
-  el.optLang.value = s.lang;
-  el.optWidth.value = s.width;
-  el.optMaxPages.value = s.maxPages;
-  el.optEmbedMode.value = s.embedMode;
-  el.optTextBlock.value = s.textBlock;
-  el.optSavePdf.checked = s.savePdf;
-  el.optOpenAfter.checked = s.openAfter;
-  el.optUriMode.value = s.uriMode;
-  el.optDownloadMd.checked = s.downloadMd;
-  el.optClipboard.checked = s.clipboard;
-  return s;
-}
-
-function currentSettings() {
-  return {
-    outputMode: el.outputMode.value,
-    vault: el.vault.value.trim(),
-    notePath: el.notePath.value.trim(),
-    pdfPath: el.pdfPath.value.trim(),
-    ocr: el.optOcr.checked,
-    threshold: Number(el.optThreshold.value) || 0,
-    lang: el.optLang.value,
-    width: Number(el.optWidth.value) || 1600,
-    maxPages: Number(el.optMaxPages.value) || 0,
-    embedMode: el.optEmbedMode.value,
-    textBlock: el.optTextBlock.value,
-    savePdf: el.optSavePdf.checked,
-    openAfter: el.optOpenAfter.checked,
-    uriMode: el.optUriMode.value,
-    downloadMd: el.optDownloadMd.checked,
-    clipboard: el.optClipboard.checked,
-  };
-}
-
-async function saveSettings() {
-  await chrome.storage.local.set({ settings: currentSettings() });
-}
-
-/** 出力方式に応じて関係ない入力欄を隠す */
-function syncModeUi() {
-  const vaultMode = el.outputMode.value === 'vault';
-  el.rowVaultDir.hidden = !vaultMode;
-  el.rowVaultName.hidden = vaultMode;
-  el.rowOpenAfter.hidden = !vaultMode;
-  el.rowUriMode.hidden = vaultMode;
-  el.rowDownloadMd.hidden = vaultMode;
-
-  if (vaultMode) {
-    el.notePathHint.textContent = 'Vault 内のパス。無ければ自動で作成します';
-    el.pdfPathHint.textContent = 'Vault 内のパス。空欄ならノートと同じ場所';
-    el.pdfPath.placeholder = '（空欄 = ノートと同じ場所）';
-  } else {
-    el.notePathHint.textContent = 'Vault 内の既存フォルダのみ（obsidian:// はフォルダを作れません）';
-    el.pdfPathHint.textContent = 'ダウンロードフォルダからの相対パス（Chrome の制約）';
-    el.pdfPath.placeholder = 'SpeakerDeck/';
-  }
-}
-
-// ------------------------------------------------------------------ Speaker Deck のタブを探す
+// ------------------------------------------------------------------ ページの解析（メタデータ）
 async function findSpeakerDeckTab() {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (active && /^https:\/\/(www\.)?speakerdeck\.com\//.test(active.url || '')) return active;
@@ -358,7 +138,9 @@ async function findSpeakerDeckTab() {
 
 async function scrapeDeck() {
   const tab = await findSpeakerDeckTab();
-  if (!tab) throw new Error('Speaker Deck のスライドページが見つかりません。該当タブを開いてから実行してください。');
+  if (!tab) {
+    throw new Error('Speaker Deck のスライドページが見つかりません。該当タブを開いてから実行してください。');
+  }
 
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
@@ -391,7 +173,7 @@ async function fetchPdf(url) {
   try {
     return await attempt();
   } catch (err) {
-    log(`直接取得に失敗: ${err.message} — ホスト権限を要求します`);
+    console.warn('PDF の直接取得に失敗。ホスト権限を要求します', err);
     if (!(await ensureHostPermission(url))) {
       throw new Error(`PDF を取得できませんでした（${new URL(url).host} へのアクセス許可が必要です）`);
     }
@@ -399,7 +181,7 @@ async function fetchPdf(url) {
   }
 }
 
-// ------------------------------------------------------------------ PDF.js のテキスト抽出
+// ------------------------------------------------------------------ テキスト抽出
 /** textContent の item 群を、Y 座標でグルーピングして行テキストに戻す */
 function textContentToString(textContent) {
   const lines = [];
@@ -435,7 +217,7 @@ function textContentToString(textContent) {
     .join('\n');
 }
 
-// ------------------------------------------------------------------ Tesseract.js（遅延初期化）
+// ------------------------------------------------------------------ OCR
 let tesseractWorker = null;
 let tesseractLang = null;
 
@@ -450,7 +232,6 @@ async function getTesseractWorker(lang) {
     throw new Error('lib/tesseract.min.js が見つかりません。setup-libs.sh を実行してください。');
   }
 
-  log(`Tesseract worker を初期化中（${lang}）…`);
   tesseractWorker = await Tesseract.createWorker(lang, 1, {
     workerPath: LIB.tessWorker,
     corePath: LIB.tessCore,
@@ -477,6 +258,15 @@ async function terminateTesseract() {
     tesseractWorker = null;
     tesseractLang = null;
   }
+}
+
+async function ocrCanvas(canvas, lang) {
+  const worker = await getTesseractWorker(lang);
+  const { data } = await worker.recognize(canvas);
+  return (data.text || '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // ------------------------------------------------------------------ ページのラスタライズ
@@ -506,49 +296,33 @@ function releaseCanvas(canvas) {
   canvas.height = 0;
 }
 
-function canvasToBlob(canvas, type = 'image/webp', quality = 0.82) {
+function canvasToBlob(canvas, quality) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('画像の書き出しに失敗しました'))), type, quality);
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('画像の書き出しに失敗しました'))),
+      'image/webp',
+      quality
+    );
   });
-}
-
-async function ocrCanvas(canvas, lang) {
-  const worker = await getTesseractWorker(lang);
-  const { data } = await worker.recognize(canvas);
-  return (data.text || '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 // ------------------------------------------------------------------ 解析パイプライン
 async function analyze() {
-  const settings = currentSettings();
+  const settings = store.settings;
 
   if (typeof pdfjsLib === 'undefined') {
     throw new Error('lib/pdf.js が見つかりません。setup-libs.sh を実行してください。');
   }
   pdfjsLib.GlobalWorkerOptions.workerSrc = LIB.pdfWorker;
 
-  setProgress(0.02, 'Speaker Deck のページを解析中…');
-  // prefill 済みならユーザーの編集を上書きしないよう再取得しない
-  const deck = state.deck || (await scrapeDeck());
-  if (!state.deck) {
-    state.deck = deck;
-    applyDeckToForm(deck);
-  }
-  log(`スライド: ${deck.title}`);
-
-  const pdfUrl = el.propPdfUrl.value.trim() || deck.pdfUrl;
+  const pdfUrl = state.variables.pdfUrl || (state.deck && state.deck.pdfUrl);
   if (!pdfUrl) {
-    throw new Error('PDF の URL を検出できませんでした。プロパティの pdf 欄に手動で指定してください。');
+    throw new Error('PDF の URL を検出できませんでした。');
   }
 
-  setProgress(0.05, 'PDF 取得中…');
-  log(`PDF: ${pdfUrl}`);
+  setProgress(0.05, 'PDF を取得中…');
   const bytes = await fetchPdf(pdfUrl);
   state.pdfBytes = bytes;
-  log(`PDF 取得完了 (${(bytes.byteLength / 1024 / 1024).toFixed(2)} MB)`);
 
   setProgress(0.1, 'PDF を読み込み中…');
   // PDF.js は渡した ArrayBuffer を worker へ transfer して detach するため、
@@ -562,8 +336,6 @@ async function analyze() {
   }).promise;
 
   const total = settings.maxPages > 0 ? Math.min(settings.maxPages, doc.numPages) : doc.numPages;
-  log(`${doc.numPages} ページ（処理対象 ${total} ページ）`);
-
   const wantImages = settings.embedMode === 'image';
   const pages = [];
   const images = [];
@@ -580,19 +352,18 @@ async function analyze() {
       text = textContentToString(content);
       if (text.length >= settings.threshold) source = 'text';
     } catch (err) {
-      log(`p.${i}: テキスト抽出に失敗 (${err.message})`);
+      console.warn(`p.${i}: テキスト抽出に失敗`, err);
     }
 
     const needsOcr = source !== 'text' && settings.ocr;
     // 画像書き出しと OCR で同じ canvas を使い回す（ラスタライズは 1 回だけ）
     let canvas = null;
     if (needsOcr || wantImages) {
-      setProgress(0.1 + (0.85 * (i - 0.5)) / total, `${i}/${total} ページ描画中…`);
       canvas = await renderPage(page, settings.width);
     }
 
     if (needsOcr && canvas) {
-      setProgress(0.1 + (0.85 * (i - 0.5)) / total, `${i}/${total} ページ OCR 中…`);
+      setProgress(0.1 + (0.85 * (i - 0.5)) / total, `${i}/${total} ページを OCR 中…`);
       try {
         const ocrText = await ocrCanvas(canvas, settings.lang);
         if (ocrText.length > text.length) {
@@ -602,7 +373,7 @@ async function analyze() {
           source = 'text';
         }
       } catch (err) {
-        log(`p.${i}: OCR に失敗 (${err.message})`);
+        console.warn(`p.${i}: OCR に失敗`, err);
       }
     } else if (source !== 'text' && text) {
       source = 'text';
@@ -610,16 +381,15 @@ async function analyze() {
 
     if (wantImages && canvas) {
       try {
-        images.push({ page: i, blob: await canvasToBlob(canvas) });
+        images.push({ page: i, blob: await canvasToBlob(canvas, settings.imageQuality) });
       } catch (err) {
-        log(`p.${i}: 画像の書き出しに失敗 (${err.message})`);
+        console.warn(`p.${i}: 画像の書き出しに失敗`, err);
       }
     }
 
     releaseCanvas(canvas);
     page.cleanup();
     pages.push({ page: i, text: text.trim(), source });
-    log(`p.${i}: ${source} / ${text.trim().length} 文字`);
 
     await sleep(0); // UI を描画させるために 1 tick 譲る
   }
@@ -629,28 +399,25 @@ async function analyze() {
 
   state.pages = pages;
   state.images = images;
-  if (images.length) {
-    const totalBytes = images.reduce((sum, img) => sum + img.blob.size, 0);
-    log(`ページ画像 ${images.length} 枚（合計 ${(totalBytes / 1024 / 1024).toFixed(1)} MB）`);
-  }
-  setProgress(1, `完了：${pages.length} ページ（OCR ${pages.filter((p) => p.source === 'ocr').length} ページ）`);
-  return pages;
+  state.analyzed = true;
+
+  const ocrCount = pages.filter((p) => p.source === 'ocr').length;
+  setProgress(1, `解析完了: ${pages.length} ページ（OCR ${ocrCount} ページ）`);
 }
 
-// ------------------------------------------------------------------ Markdown 生成
+// ------------------------------------------------------------------ スライドの Markdown
 const SUMMARY_LABEL = '📄 抽出テキスト / OCR';
 const EMPTY_TEXT = '（このページからテキストは抽出できませんでした）';
 
-const htmlEscape = (s) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const htmlEscape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /**
  * 抽出テキストを折りたたみブロックにする。
  *
- * `<details>` に空行を含む Markdown を入れると、CommonMark の規則で
+ * <details> に空行を含む Markdown を入れると、CommonMark の規則で
  * 最初の空行が HTML ブロックの終わりと解釈され、以降の本文が
  * <details> の外に出てしまう（＝トグルに収まらない）。
- * 既定の callout はこの問題が原理的に起きない Obsidian ネイティブ記法。
+ * 既定の callout は全行が > で始まるためこの問題が起きない。
  */
 function foldedTextBlock(text, mode) {
   const body = (text || '').trim();
@@ -665,100 +432,214 @@ function foldedTextBlock(text, mode) {
     return `<details><summary>${SUMMARY_LABEL}</summary><pre>\n${inner}\n</pre></details>`;
   }
 
-  // callout（既定）: 折りたたみ表示は [!quote]- の "-"
-  const lines = (body || EMPTY_TEXT)
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trimEnd();
-      if (!trimmed) return '>';
-      // 引用内の "---" は水平線になってしまうのでエスケープする
-      return `> ${trimmed.replace(/^(-{3,}|\*{3,}|_{3,})$/, '\\$1')}`;
-    });
+  const lines = (body || EMPTY_TEXT).split('\n').map((line) => {
+    const trimmed = line.trimEnd();
+    if (!trimmed) return '>';
+    // 引用内の "---" は水平線になってしまうのでエスケープする
+    return `> ${trimmed.replace(/^(-{3,}|\*{3,}|_{3,})$/, '\\$1')}`;
+  });
   return [`> [!quote]- ${SUMMARY_LABEL}`, ...lines].join('\n');
 }
 
 const slideImageName = (page) => `slide-${String(page).padStart(3, '0')}.webp`;
 
-/** ページ画像を置く Vault 内フォルダ。デッキごとにサブフォルダを切る。 */
-function imageDirFor(settings, baseName) {
-  if (settings.outputMode !== 'vault') return baseName;
-  return joinPath(sanitizeFolder(settings.pdfPath) || sanitizeFolder(settings.notePath), baseName);
+/** ページ画像を置くフォルダ。デッキごとにサブフォルダを切る。 */
+function imageDirFor(template, baseName) {
+  const base = sanitizeFolder(template.pdfPath) || sanitizeFolder(template.path);
+  return joinPath(base, baseName);
 }
 
-function buildMarkdown() {
-  const settings = currentSettings();
-  const title = el.propTitle.value.trim() || '（無題）';
-  const author = el.propAuthor.value.trim();
-  const source = el.propSource.value.trim();
-  const date = el.propDate.value.trim() || todayISO();
-  const tags = el.propTags.value
-    .split(/[,\s]+/)
-    .map((t) => t.trim())
-    .filter(Boolean);
-  const description = (state.deck && state.deck.description) || '';
-  const baseName = sanitizeFileName(el.noteName.value.trim() || title);
+function buildSlidesMarkdown(baseName) {
+  const template = state.template;
+  const settings = store.settings;
+  const useImages = settings.embedMode === 'image' && state.images.length > 0;
+  const imageDir = imageDirFor(template, baseName);
   const pdfFileName = `${baseName}.pdf`;
 
-  // 画像モードでも、解析時に画像を書き出していなければ PDF 埋め込みにフォールバックする
-  const useImages = settings.embedMode === 'image' && state.images.length > 0;
-  const imageDir = imageDirFor(settings, baseName);
   const embedFor = (page) =>
-    useImages ? `![[${joinPath(imageDir, slideImageName(page))}]]` : `![[${pdfFileName}#page=${page}]]`;
+    useImages
+      ? `![[${joinPath(imageDir, slideImageName(page))}]]`
+      : `![[${pdfFileName}#page=${page}]]`;
 
-  const front = [
-    '---',
-    `title: ${yamlString(title)}`,
-    `author: ${yamlString(author)}`,
-    `source: ${yamlString(source)}`,
-    `date: ${yamlString(date)}`,
-    `tags: [${(tags.length ? tags : ['slide', 'speakerdeck']).join(', ')}]`,
-    '---',
-    '',
-  ].join('\n');
-
-  const head = [
-    `# ${title}`,
-    '',
-    '## 概要',
-    description || '_（概要は取得できませんでした）_',
-    '',
-    // 画像モードでも PDF を保存するなら、原本へのリンクを 1 本だけ残す
-    ...(useImages && settings.savePdf ? ['', `📎 元 PDF: [[${pdfFileName}]]`] : []),
-    '',
-    '---',
-    '',
-    '## スライド一覧',
-    '',
-  ].join('\n');
-
-  const body = state.pages
+  return state.pages
     .map((p) =>
-      [
-        `### Slide ${p.page}`,
-        embedFor(p.page),
-        '',
-        foldedTextBlock(p.text, settings.textBlock),
-        '',
-        '---',
-        '',
-      ].join('\n')
+      [`### Slide ${p.page}`, embedFor(p.page), '', foldedTextBlock(p.text, settings.textBlock), '', '---', ''].join('\n')
     )
-    .join('');
-
-  return `${front}${head}${body}`.trimEnd() + '\n';
+    .join('\n');
 }
 
-function refreshPreview() {
-  if (!state.pages.length) return;
-  // ユーザーが本文を手で直していたら上書きしない
-  if (state.lastGenerated && el.markdown.value !== state.lastGenerated) return;
-  el.markdown.value = buildMarkdown();
-  state.lastGenerated = el.markdown.value;
-  const ocrCount = state.pages.filter((p) => p.source === 'ocr').length;
-  el.previewMeta.textContent = `${state.pages.length} ページ / OCR ${ocrCount} / ${el.markdown.value.length.toLocaleString()} 文字`;
+// ------------------------------------------------------------------ 変数
+function buildVariables() {
+  const deck = state.deck || {};
+  const now = new Date();
+  let domain = '';
+  try {
+    domain = deck.url ? new URL(deck.url).hostname : '';
+  } catch (_) {
+    domain = '';
+  }
+
+  const variables = {
+    title: deck.title || '',
+    author: deck.author || '',
+    url: deck.url || '',
+    domain,
+    description: deck.description || '',
+    published: normalizeDate(deck.publishedAt),
+    date: formatDate(now, 'YYYY-MM-DD'),
+    time: now.toISOString(),
+    pdfUrl: deck.pdfUrl || '',
+    deckId: deck.deckId || '',
+    thumbnail: deck.thumbnail || '',
+    slideCount: state.pages.length || deck.slideCountGuess || '',
+    ocrCount: state.pages.filter((p) => p.source === 'ocr').length,
+    textCount: state.pages.filter((p) => p.source === 'text').length,
+    allText: state.pages.map((p) => p.text).filter(Boolean).join('\n\n'),
+    firstText: state.pages.length ? state.pages[0].text : '',
+    noteName: '',
+    slides: '',
+    content: '',
+    pdfLink: '',
+  };
+
+  // ノート名は他の変数から作るので、確定してから変数表に入れ直す
+  const baseName = sanitizeFileName(
+    renderTemplate(state.template.noteNameFormat || '{{title}}', variables) || deck.title
+  );
+  variables.noteName = baseName;
+  variables.pdfLink = `![[${baseName}.pdf]]`;
+
+  if (state.pages.length) {
+    variables.slides = buildSlidesMarkdown(baseName);
+    variables.content = variables.slides;
+  }
+
+  return variables;
+}
+
+// ------------------------------------------------------------------ テンプレートの反映
+function renderPropertyRows() {
+  const container = el.properties;
+  container.textContent = '';
+
+  // フロントマターは同名のプロパティを最初の 1 個しか書き出さない。
+  // 出力されない行をここに出すと編集しても反映されず混乱するので、同じ規則で間引く。
+  const shown = new Set();
+
+  for (const property of state.template.properties) {
+    const name = (property.name || '').trim();
+    if (!name || shown.has(name)) continue;
+    shown.add(name);
+
+    const inputId = `property-${property.id || name}`;
+    const type = getPropertyType(name);
+    const value = renderTemplate(property.value, state.variables);
+
+    const row = document.createElement('div');
+    row.className = 'metadata-property';
+
+    const key = document.createElement('div');
+    key.className = 'metadata-property-key';
+
+    const icon = document.createElement('span');
+    icon.className = 'metadata-property-icon';
+    icon.appendChild(createIcon(getPropertyTypeIcon(type)));
+    key.appendChild(icon);
+
+    const label = document.createElement('label');
+    label.setAttribute('for', inputId);
+    label.textContent = name;
+    label.title = name;
+    key.appendChild(label);
+
+    const valueBox = document.createElement('div');
+    valueBox.className = 'metadata-property-value';
+
+    const input = document.createElement('input');
+    input.id = inputId;
+    input.type = type === 'checkbox' ? 'checkbox' : 'text';
+    input.dataset.name = name;
+    input.dataset.type = type;
+    if (type === 'checkbox') input.checked = value === 'true';
+    else input.value = value;
+    // 解析後に値を作り直すとき、ユーザーが手で直した欄は上書きしない
+    input.dataset.generated = value;
+    valueBox.appendChild(input);
+
+    row.appendChild(key);
+    row.appendChild(valueBox);
+    container.appendChild(row);
+  }
+}
+
+/** 解析結果を反映するため、手を入れていない欄だけ作り直す */
+function refreshGeneratedValues() {
+  for (const input of el.properties.querySelectorAll('input')) {
+    const property = state.template.properties.find((p) => p.name === input.dataset.name);
+    if (!property) continue;
+    const next = renderTemplate(property.value, state.variables);
+    const isUntouched =
+      input.type === 'checkbox'
+        ? String(input.checked) === input.dataset.generated
+        : input.value === input.dataset.generated;
+    if (!isUntouched) continue;
+    if (input.type === 'checkbox') input.checked = next === 'true';
+    else input.value = next;
+    input.dataset.generated = next;
+  }
+
+  if (el.noteName.value === el.noteName.dataset.generated) {
+    el.noteName.value = state.variables.noteName;
+    el.noteName.dataset.generated = state.variables.noteName;
+  }
+
+  const path = renderTemplate(state.template.path, state.variables);
+  if (el.pathField.value === el.pathField.dataset.generated) {
+    el.pathField.value = path;
+    el.pathField.dataset.generated = path;
+  }
+}
+
+function applyTemplate({ forceContent = false } = {}) {
+  state.variables = buildVariables();
+
+  el.noteName.value = state.variables.noteName;
+  el.noteName.dataset.generated = state.variables.noteName;
+
+  const path = renderTemplate(state.template.path, state.variables);
+  el.pathField.value = path;
+  el.pathField.dataset.generated = path;
+
+  renderPropertyRows();
+
+  if (state.analyzed) updateNoteContent(forceContent);
+}
+
+/**
+ * 本文欄を作り直す。手で直した内容は残す（force のときだけ捨てる）。
+ * 空欄のときは「まだ何も入っていない」とみなして常に入れ直す。
+ */
+function updateNoteContent(force = false) {
+  const generated = renderTemplate(state.template.noteContentFormat, state.variables).trimEnd() + '\n';
+  const untouched = !el.noteContent.value.trim() || el.noteContent.value === state.lastGeneratedContent;
+  if (!force && !untouched) return;
+  el.noteContent.value = generated;
+  state.lastGeneratedContent = generated;
 }
 
 // ------------------------------------------------------------------ 出力
+function collectProperties() {
+  return [...el.properties.querySelectorAll('input')].map((input) => ({
+    name: input.dataset.name,
+    value: input.type === 'checkbox' ? String(input.checked) : input.value,
+  }));
+}
+
+function buildMarkdown() {
+  const frontmatter = generateFrontmatter(collectProperties(), propertyTypeMap());
+  return `${frontmatter}\n${el.noteContent.value.trimEnd()}\n`;
+}
+
 async function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const id = await chrome.downloads.download({ url, filename, saveAs: false });
@@ -773,322 +654,438 @@ async function downloadBlob(blob, filename) {
 }
 
 /**
- * content を渡すと本文を直接載せる。省略すると `clipboard=true` を付け、
+ * content を渡すと本文を直接載せる。省略すると clipboard=true を付け、
  * Obsidian にクリップボードの中身を本文として使わせる（URI 長制限の回避）。
  */
-function buildObsidianUri(mode, { vault, filePath, content }) {
-  const q = new URLSearchParams();
-  if (vault) q.set('vault', vault);
+function buildObsidianUri(mode, { vault, filePath, content, behavior }) {
+  const query = new URLSearchParams();
+  if (vault) query.set('vault', vault);
 
   if (mode === 'advanced') {
-    q.set('filepath', filePath);
-    q.set('mode', 'new');
-    if (content === undefined) q.set('clipboard', 'true');
-    else q.set('data', content);
-    return `obsidian://advanced-uri?${q.toString()}`;
+    query.set('filepath', filePath);
+    query.set('mode', behavior === 'create' ? 'new' : behavior);
+    if (content === undefined) query.set('clipboard', 'true');
+    else query.set('data', content);
+    return `obsidian://advanced-uri?${query.toString()}`;
   }
 
-  q.set('file', filePath);
-  if (content === undefined) q.set('clipboard', 'true');
-  else q.set('content', content);
-  return `obsidian://new?${q.toString()}`;
+  query.set('file', filePath);
+  if (behavior === 'append') query.set('append', 'true');
+  else if (behavior === 'prepend') query.set('prepend', 'true');
+  else if (behavior === 'overwrite') query.set('overwrite', 'true');
+  if (content === undefined) query.set('clipboard', 'true');
+  else query.set('content', content);
+  return `obsidian://new?${query.toString()}`;
 }
 
 /** 拡張機能ページから外部プロトコルを起動する */
 function openExternalUri(uri) {
-  const a = document.createElement('a');
-  a.href = uri;
-  a.target = '_self';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const anchor = document.createElement('a');
+  anchor.href = uri;
+  anchor.target = '_self';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
-// --------------------------------------------- 方式 A: Vault へ直接書き込み
-async function sendToVault(settings, markdown, baseName) {
-  if (!state.vaultDir) {
-    throw new Error('Vault フォルダが未選択です。「選択…」から Vault のルートを指定してください。');
+async function ensureDir(root, relDir) {
+  let dir = root;
+  for (const segment of sanitizeFolder(relDir).split('/').filter(Boolean)) {
+    dir = await dir.getDirectoryHandle(segment, { create: true });
   }
-  if (!(await ensurePermission(state.vaultDir))) {
-    throw new Error('Vault フォルダへの書き込みが許可されませんでした。');
+  return dir;
+}
+
+async function writeIntoVault(root, relPath, data) {
+  const parts = relPath.split('/');
+  const name = parts.pop();
+  const dir = await ensureDir(root, parts.join('/'));
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(data);
+  await writable.close();
+}
+
+async function readFromVault(root, relPath) {
+  const parts = relPath.split('/');
+  const name = parts.pop();
+  try {
+    const dir = await ensureDir(root, parts.join('/'));
+    const handle = await dir.getFileHandle(name, { create: false });
+    return await (await handle.getFile()).text();
+  } catch (_) {
+    return null;
+  }
+}
+
+/** 既存ノートとの関係（追記・上書き・別名で作成）を解決して書き込む */
+async function writeNote(root, relPath, markdown, behavior) {
+  const existing = await readFromVault(root, relPath);
+
+  if (existing === null || behavior === 'overwrite') {
+    await writeIntoVault(root, relPath, markdown);
+    return relPath;
   }
 
-  const noteFolder = sanitizeFolder(settings.notePath);
-  const pdfFolder = sanitizeFolder(settings.pdfPath) || noteFolder;
+  if (behavior === 'append') {
+    await writeIntoVault(root, relPath, `${existing.trimEnd()}\n\n${markdown}`);
+    return relPath;
+  }
+
+  if (behavior === 'prepend') {
+    await writeIntoVault(root, relPath, `${markdown}\n${existing}`);
+    return relPath;
+  }
+
+  // create: 同名ノートがあるときは連番を付けて別ファイルにする
+  const base = relPath.replace(/\.md$/, '');
+  for (let i = 1; i < 100; i += 1) {
+    const candidate = `${base} ${i}.md`;
+    if ((await readFromVault(root, candidate)) === null) {
+      await writeIntoVault(root, candidate, markdown);
+      return candidate;
+    }
+  }
+  await writeIntoVault(root, relPath, markdown);
+  return relPath;
+}
+
+async function saveAttachments({ mode, root, baseName, template }) {
+  const settings = store.settings;
   const notices = [];
-
-  const notePath = joinPath(noteFolder, `${baseName}.md`);
-  await writeIntoVault(notePath, markdown);
-  notices.push(`ノート → ${notePath}`);
-  log(`Vault に書き込み: ${notePath}`);
+  const attachmentDir = sanitizeFolder(template.pdfPath) || sanitizeFolder(template.path);
 
   if (settings.embedMode === 'image' && state.images.length) {
-    const imageDir = imageDirFor(settings, baseName);
+    const imageDir = imageDirFor(template, baseName);
     let done = 0;
-    for (const img of state.images) {
-      await writeIntoVault(joinPath(imageDir, slideImageName(img.page)), img.blob);
+    for (const image of state.images) {
+      const relPath = joinPath(imageDir, slideImageName(image.page));
+      if (mode === 'vault') await writeIntoVault(root, relPath, image.blob);
+      else await downloadBlob(image.blob, relPath);
       done += 1;
-      setProgress(done / state.images.length, `ページ画像を書き込み中… ${done}/${state.images.length}`);
+      setProgress(done / state.images.length, `ページ画像を保存中… ${done}/${state.images.length}`);
     }
-    notices.push(`画像 ${state.images.length} 枚 → ${imageDir}/`);
-    log(`Vault に書き込み: ${imageDir}/ (${state.images.length} 枚)`);
+    notices.push(`画像 ${state.images.length} 枚`);
   }
 
   if (settings.savePdf && state.pdfBytes) {
-    const pdfPath = joinPath(pdfFolder, `${baseName}.pdf`);
-    await writeIntoVault(pdfPath, new Blob([state.pdfBytes], { type: 'application/pdf' }));
-    notices.push(`PDF → ${pdfPath}`);
-    log(`Vault に書き込み: ${pdfPath}`);
-  }
-
-  if (settings.clipboard) {
-    try {
-      await navigator.clipboard.writeText(markdown);
-      notices.push('クリップボードにコピー');
-    } catch (err) {
-      log(`クリップボードへのコピーに失敗: ${err.message}`);
-    }
-  }
-
-  if (settings.openAfter) {
-    const q = new URLSearchParams();
-    // Vault 名が未入力なら、選択したフォルダ名を Vault 名とみなす
-    q.set('vault', settings.vault || state.vaultDir.name);
-    q.set('file', joinPath(noteFolder, baseName));
-    openExternalUri(`obsidian://open?${q.toString()}`);
-    log('Obsidian でノートを開きました');
+    const relPath = joinPath(attachmentDir, `${baseName}.pdf`);
+    const blob = new Blob([state.pdfBytes], { type: 'application/pdf' });
+    if (mode === 'vault') await writeIntoVault(root, relPath, blob);
+    else await downloadBlob(blob, relPath);
+    notices.push('PDF');
   }
 
   return notices;
 }
 
-// --------------------------------------------- 方式 B: ダウンロード + obsidian:// URI
-async function sendViaDownloads(settings, markdown, baseName) {
-  const noteFolder = sanitizeFolder(settings.notePath);
+async function copyToClipboard(markdown) {
+  try {
+    await navigator.clipboard.writeText(markdown);
+    return true;
+  } catch (err) {
+    console.warn('クリップボードへのコピーに失敗', err);
+    return false;
+  }
+}
+
+function currentVaultName() {
+  if (el.vaultSelect.value) return el.vaultSelect.value;
+  return state.template.vault || store.settings.vaults[0] || '';
+}
+
+async function saveToVault(markdown, baseName) {
+  const root = await getVaultDirHandle();
+  if (!root) {
+    throw new Error('Vault フォルダが未選択です。設定画面から選んでください。');
+  }
+  if (!(await ensureVaultPermission(root))) {
+    throw new Error('Vault フォルダへの書き込みが許可されませんでした。');
+  }
+
+  const template = state.template;
+  const noteFolder = sanitizeFolder(el.pathField.value);
+  const notePath = joinPath(noteFolder, `${baseName}.md`);
+
+  const writtenPath = await writeNote(root, notePath, markdown, template.behavior);
+  const notices = [`ノート → ${writtenPath}`];
+  notices.push(...(await saveAttachments({ mode: 'vault', root, baseName, template })));
+
+  if (store.settings.clipboard) await copyToClipboard(markdown);
+
+  if (store.settings.openAfterSave) {
+    const query = new URLSearchParams();
+    const vault = currentVaultName() || root.name;
+    if (vault) query.set('vault', vault);
+    query.set('file', writtenPath.replace(/\.md$/, ''));
+    openExternalUri(`obsidian://open?${query.toString()}`);
+  }
+
+  return notices;
+}
+
+async function saveViaDownloads(markdown, baseName) {
+  const template = state.template;
+  const settings = store.settings;
+  const noteFolder = sanitizeFolder(el.pathField.value);
   const filePath = joinPath(noteFolder, baseName);
   const notices = [];
 
-  if (settings.savePdf) {
-    const target = joinPath(settings.pdfPath, `${baseName}.pdf`);
-    try {
-      if (state.pdfBytes) {
-        await downloadBlob(new Blob([state.pdfBytes], { type: 'application/pdf' }), target);
-      } else if (el.propPdfUrl.value.trim()) {
-        await chrome.downloads.download({ url: el.propPdfUrl.value.trim(), filename: target, saveAs: false });
-      }
-      notices.push(`PDF → ${target}`);
-      log(`PDF を保存: ${target}`);
-    } catch (err) {
-      log(`PDF の保存に失敗: ${err.message}`);
-      notices.push('PDF 保存に失敗');
-    }
-  }
-
-  if (settings.embedMode === 'image' && state.images.length) {
-    const imageDir = joinPath(settings.pdfPath, baseName);
-    for (const img of state.images) {
-      await downloadBlob(img.blob, joinPath(imageDir, slideImageName(img.page)));
-    }
-    notices.push(`画像 ${state.images.length} 枚 → ${imageDir}/`);
-    log(`画像を保存: ${imageDir}/ (${state.images.length} 枚)`);
-  }
+  notices.push(...(await saveAttachments({ mode: 'downloads', baseName, template })));
 
   if (settings.downloadMd) {
-    const target = joinPath(settings.pdfPath, `${baseName}.md`);
-    try {
-      await downloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), target);
-      notices.push(`Markdown → ${target}`);
-      log(`Markdown を保存: ${target}`);
-    } catch (err) {
-      log(`.md の保存に失敗: ${err.message}`);
-    }
+    const target = joinPath(noteFolder, `${baseName}.md`);
+    await downloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), target);
+    notices.push(`Markdown → ${target}`);
   }
 
-  // 長い Markdown は obsidian:// の clipboard=true で受け渡すため、
-  // 設定が OFF でも Obsidian 送出が有効なら必ずコピーしておく。
+  // 長い Markdown は clipboard=true で受け渡すため、設定が OFF でも
+  // Obsidian 送出が有効ならコピーしておく。
   let clipboardOk = false;
   if (settings.clipboard || settings.uriMode !== 'none') {
-    try {
-      await navigator.clipboard.writeText(markdown);
-      clipboardOk = true;
-      if (settings.clipboard) notices.push('クリップボードにコピー');
-      log('Markdown をクリップボードにコピーしました');
-    } catch (err) {
-      log(`クリップボードへのコピーに失敗: ${err.message}`);
-    }
+    clipboardOk = await copyToClipboard(markdown);
   }
 
   if (settings.uriMode !== 'none') {
-    const full = buildObsidianUri(settings.uriMode, { vault: settings.vault, filePath, content: markdown });
+    const vault = currentVaultName();
+    const full = buildObsidianUri(settings.uriMode, {
+      vault,
+      filePath,
+      content: markdown,
+      behavior: template.behavior,
+    });
 
     if (full.length <= MAX_URI_LENGTH) {
       openExternalUri(full);
       notices.push(`Obsidian に送信 → ${filePath}`);
-      log(`obsidian URI を送出しました (${full.length} 文字)`);
     } else if (clipboardOk) {
-      openExternalUri(buildObsidianUri(settings.uriMode, { vault: settings.vault, filePath }));
+      openExternalUri(
+        buildObsidianUri(settings.uriMode, { vault, filePath, behavior: template.behavior })
+      );
       notices.push(`Obsidian に送信（クリップボード経由）→ ${filePath}`);
-      log(`URI が長い (${full.length} 文字) ため clipboard=true で送出しました`);
     } else {
-      notices.push('Obsidian へ送れません（クリップボード不可 + URI 長すぎ）');
+      notices.push('Obsidian へ送れませんでした（クリップボード不可 + URI 長すぎ）');
     }
 
     if (noteFolder) {
-      log(`※ Vault 内に "${noteFolder}" フォルダが無いと Obsidian 側でノートを作成できません`);
+      console.info(`Vault 内に "${noteFolder}" フォルダが無いと Obsidian 側でノートを作成できません`);
     }
   }
 
   return notices;
 }
 
-async function send() {
-  const settings = currentSettings();
-  await saveSettings();
+async function saveFileOnly(markdown, baseName) {
+  const template = state.template;
+  const notices = [];
+  const target = joinPath(sanitizeFolder(el.pathField.value), `${baseName}.md`);
+  await downloadBlob(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }), target);
+  notices.push(`Markdown → ${target}`);
+  notices.push(...(await saveAttachments({ mode: 'downloads', baseName, template })));
+  return notices;
+}
 
-  const markdown = el.markdown.value;
-  if (!markdown.trim()) throw new Error('送出する Markdown がありません。先に解析を実行してください。');
+async function performSave(behavior) {
+  const markdown = buildMarkdown();
+  const baseName = sanitizeFileName(el.noteName.value);
 
-  const baseName = sanitizeFileName(el.noteName.value.trim() || el.propTitle.value.trim());
+  if (behavior === 'copyToClipboard') {
+    if (!(await copyToClipboard(markdown))) throw new Error('クリップボードにコピーできませんでした');
+    setStatus('クリップボードにコピーしました', 'success');
+    return;
+  }
+
+  if (behavior === 'saveFile') {
+    const notices = await saveFileOnly(markdown, baseName);
+    setStatus(notices.join(' / '), 'success');
+    return;
+  }
+
   const notices =
-    settings.outputMode === 'vault'
-      ? await sendToVault(settings, markdown, baseName)
-      : await sendViaDownloads(settings, markdown, baseName);
-
-  setStatus(notices.join(' / ') || '出力先が選択されていません', 'ok');
+    store.settings.outputMode === 'vault'
+      ? await saveToVault(markdown, baseName)
+      : await saveViaDownloads(markdown, baseName);
+  setStatus(notices.join(' / '), 'success');
 }
 
-// ------------------------------------------------------------------ フォーム反映
-function applyDeckToForm(deck) {
-  el.deckTitleTop.textContent = deck.title || 'Speaker Deck → Obsidian';
-  el.deckTitleTop.title = deck.title || '';
-  if (!el.noteName.value.trim()) el.noteName.value = sanitizeFileName(deck.title);
-  el.propTitle.value = deck.title || '';
-  el.propAuthor.value = deck.author || '';
-  el.propSource.value = deck.url || '';
-  el.propDate.value = normalizeDate(deck.publishedAt);
-  if (!el.propTags.value.trim()) el.propTags.value = 'slide, speakerdeck';
-  el.propPdfUrl.value = deck.pdfUrl || '';
+// ------------------------------------------------------------------ ボタンとメニュー
+function updateActionButtons() {
+  if (!state.analyzed) {
+    el.clipBtn.textContent = 'スライドを解析';
+    el.moreBtn.hidden = true;
+    return;
+  }
+  el.clipBtn.textContent = SAVE_BEHAVIOR_LABELS[store.settings.saveBehavior];
+  el.moreBtn.hidden = false;
+  renderMoreMenu();
 }
 
-/** ポップアップを開いた直後に、解析はせずメタデータだけ先読みする */
-async function prefill() {
-  try {
-    const deck = await scrapeDeck();
-    state.deck = deck;
-    applyDeckToForm(deck);
-    setStatus(
-      deck.pdfUrl
-        ? 'PDF を検出しました。「スライドを解析」を押してください。'
-        : 'PDF URL が見つかりません。プロパティの pdf 欄に手動入力できます。',
-      deck.pdfUrl ? '' : 'error'
-    );
-  } catch (err) {
-    setStatus(err.message, 'error');
+function renderMoreMenu() {
+  el.moreDropdown.textContent = '';
+
+  const actions = Object.keys(SAVE_BEHAVIOR_LABELS)
+    .filter((behavior) => behavior !== store.settings.saveBehavior)
+    .map((behavior) => ({
+      icon: SAVE_BEHAVIOR_ICONS[behavior],
+      label: SAVE_BEHAVIOR_LABELS[behavior],
+      run: () => runSave(behavior),
+    }));
+
+  actions.push({ icon: 'refresh-cw', label: 'もう一度解析', run: runAnalyze });
+
+  for (const action of actions) {
+    const item = document.createElement('div');
+    item.className = 'menu-item';
+
+    const icon = document.createElement('div');
+    icon.className = 'menu-item-icon';
+    icon.appendChild(createIcon(action.icon));
+    item.appendChild(icon);
+
+    const title = document.createElement('div');
+    title.className = 'menu-item-title';
+    title.textContent = action.label;
+    item.appendChild(title);
+
+    item.addEventListener('click', () => {
+      el.moreDropdown.classList.remove('show');
+      action.run();
+    });
+    el.moreDropdown.appendChild(item);
   }
 }
 
-// ------------------------------------------------------------------ イベント
-el.extractBtn.addEventListener('click', async () => {
+async function runAnalyze() {
   if (state.running) return;
   state.running = true;
-  el.extractBtn.disabled = true;
-  el.sendBtn.disabled = true;
-  el.logArea.textContent = '';
-  state.lastGenerated = '';
-  state.images = []; // 前回の解析結果を持ち越さない
-  setStatus('解析中…');
+  el.clipBtn.disabled = true;
+  el.moreBtn.disabled = true;
 
   try {
-    await saveSettings();
     await analyze();
-    refreshPreview();
-    el.sendBtn.disabled = false;
-    setStatus('解析が完了しました。内容を確認して「Obsidian に追加」を押してください。', 'ok');
+    state.variables = buildVariables();
+    refreshGeneratedValues();
+    updateNoteContent();
+    updateActionButtons();
   } catch (err) {
     console.error(err);
-    log(`エラー: ${err.message}`);
     setStatus(err.message, 'error');
     await terminateTesseract();
   } finally {
     state.running = false;
-    el.extractBtn.disabled = false;
+    el.clipBtn.disabled = false;
+    el.moreBtn.disabled = false;
   }
-});
+}
 
-el.sendBtn.addEventListener('click', async () => {
-  el.sendBtn.disabled = true;
+async function runSave(behavior) {
+  if (state.running) return;
+  state.running = true;
+  el.clipBtn.disabled = true;
+
   try {
-    await send();
+    await performSave(behavior);
   } catch (err) {
     console.error(err);
     setStatus(err.message, 'error');
   } finally {
-    el.sendBtn.disabled = false;
+    state.running = false;
+    el.clipBtn.disabled = false;
   }
-});
-
-el.pickVaultBtn.addEventListener('click', async () => {
-  try {
-    await pickVaultDir();
-  } catch (err) {
-    if (err.name !== 'AbortError') setStatus(err.message, 'error');
-  }
-});
-
-el.outputMode.addEventListener('change', async () => {
-  syncModeUi();
-  await saveSettings();
-});
-
-el.toggleSettingsBtn.addEventListener('click', () => {
-  el.settingsPanel.hidden = !el.settingsPanel.hidden;
-});
-
-el.openInTabBtn.addEventListener('click', async () => {
-  await saveSettings();
-  await chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html?standalone=1') });
-  window.close();
-});
-
-for (const input of [el.propTitle, el.propAuthor, el.propSource, el.propDate, el.propTags, el.noteName]) {
-  input.addEventListener('change', refreshPreview);
 }
 
-for (const input of [
-  el.vault, el.notePath, el.pdfPath, el.optOcr, el.optThreshold, el.optLang, el.optWidth,
-  el.optMaxPages, el.optSavePdf, el.optOpenAfter, el.optUriMode, el.optDownloadMd, el.optClipboard,
-]) {
-  input.addEventListener('change', saveSettings);
+// ------------------------------------------------------------------ テンプレート選択
+function renderTemplateSelect() {
+  el.templateSelect.textContent = '';
+  for (const template of store.templates) {
+    const option = document.createElement('option');
+    option.value = template.id;
+    option.textContent = template.name;
+    el.templateSelect.appendChild(option);
+  }
+  el.templateSelect.value = state.template.id;
 }
 
-// 表示形式を変えたらプレビューを作り直す
-el.optTextBlock.addEventListener('change', async () => {
-  await saveSettings();
-  refreshPreview();
-});
-
-// 埋め込み形式を変えたらプレビューも作り直す（画像パス ⇄ PDF ページ指定）
-el.optEmbedMode.addEventListener('change', async () => {
-  await saveSettings();
-  if (el.optEmbedMode.value === 'image' && state.pages.length && !state.images.length) {
-    setStatus('画像を書き出すには「スライドを解析」をもう一度実行してください。', 'error');
+function renderVaultSelect() {
+  const vaults = store.settings.vaults;
+  el.vaultContainer.hidden = vaults.length < 2;
+  el.vaultSelect.textContent = '';
+  for (const vault of vaults) {
+    const option = document.createElement('option');
+    option.value = vault;
+    option.textContent = vault;
+    el.vaultSelect.appendChild(option);
   }
-  refreshPreview();
-});
+  el.vaultSelect.value = state.template.vault || vaults[0] || '';
+}
 
 // ------------------------------------------------------------------ 起動
-(async () => {
-  if (isStandalone) {
-    document.body.classList.add('standalone');
-    el.openInTabBtn.hidden = true;
-  }
-  await loadSettings();
-  syncModeUi();
-  await restoreVaultDir();
+async function initialize() {
+  if (isStandalone) document.body.classList.add('standalone');
+  initializeIcons(document);
 
-  if (new URLSearchParams(location.search).has('pick')) {
-    setStatus('「選択…」を押して Vault のルートフォルダを指定してください。');
+  await loadAll();
+
+  el.openSettings.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+    else chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+    window.close();
+  });
+
+  el.openInTab.hidden = isStandalone;
+  el.openInTab.addEventListener('click', async (event) => {
+    event.preventDefault();
+    await chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html?standalone=1') });
+    window.close();
+  });
+
+  el.propertiesHeader.addEventListener('click', () => {
+    el.propertiesHeader.classList.toggle('collapsed');
+    el.properties.classList.toggle('collapsed');
+  });
+
+  el.moreBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    el.moreDropdown.classList.toggle('show');
+  });
+  document.addEventListener('click', () => el.moreDropdown.classList.remove('show'));
+
+  el.clipBtn.addEventListener('click', () => {
+    if (state.analyzed) runSave(store.settings.saveBehavior);
+    else runAnalyze();
+  });
+
+  el.templateSelect.addEventListener('change', () => {
+    const template = findTemplateById(el.templateSelect.value);
+    if (!template) return;
+    state.template = template;
+    applyTemplate({ forceContent: true });
+    renderVaultSelect();
+  });
+
+  try {
+    state.deck = await scrapeDeck();
+  } catch (err) {
+    showFatalError(err.message);
+    return;
   }
 
-  await prefill();
-})();
+  state.template = findTemplateForUrl(state.deck.url) || store.templates[0];
+  renderTemplateSelect();
+  renderVaultSelect();
+  applyTemplate();
+  updateActionButtons();
+
+  if (!state.deck.pdfUrl) {
+    setStatus('PDF の URL を検出できませんでした。ページを再読み込みしてみてください。', 'error');
+  } else {
+    setStatus('PDF を検出しました。「スライドを解析」を押してください。');
+    el.progressFill.style.width = '0%';
+  }
+}
+
+initialize().catch((err) => {
+  console.error(err);
+  showFatalError(err.message);
+});
