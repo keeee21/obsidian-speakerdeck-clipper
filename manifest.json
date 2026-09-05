@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Speaker Deck → Obsidian",
-  "version": "1.0.0",
+  "name": "obsidian-speakerdeck-clipper",
+  "version": "2.0.0",
   "description": "Speaker Deck のスライドを文字起こしして Obsidian に保存します。",
   "minimum_chrome_version": "116",
   "icons": {
@@ -23,9 +23,13 @@
     "https://*.speakerdeck.com/*"
   ],
   "optional_host_permissions": ["https://*/*"],
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Speaker Deck → Obsidian",
+    "default_title": "obsidian-speakerdeck-clipper",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
